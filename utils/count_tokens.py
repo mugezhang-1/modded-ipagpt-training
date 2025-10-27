@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-count_tokens.py – Count total tokens in your dataset.
+Count total tokens for specified epochs in your dataset for training
 """
 
 import argparse
@@ -23,6 +23,12 @@ def main():
         default=524_288,
         help="Tokens per iteration (default: 524,288 for 8 GPUs)",
     )
+    ap.add_argument(
+        "--epochs",
+        type=int,
+        default=1,
+        help="Number of epochs to calculate iterations for (default: 1)",
+    )
     args = ap.parse_args()
 
     train_files = sorted(args.data_dir.glob("data_train_*.bin"))
@@ -38,10 +44,15 @@ def main():
             total_tokens += num_tokens
             print(f"{file.name}: {num_tokens:,} tokens")
 
+    total_tokens_all_epochs = total_tokens * args.epochs
+    iterations = total_tokens_all_epochs / args.tokens_per_iter
+
     print(f"\n{'=' * 60}")
-    print(f"Total training tokens: {total_tokens:,}")
+    print(f"Total training tokens (1 epoch): {total_tokens:,}")
+    print(f"Number of epochs: {args.epochs}")
+    print(f"Total tokens ({args.epochs} epoch{'s' if args.epochs != 1 else ''}): {total_tokens_all_epochs:,}")
     print(f"Tokens per iteration (8 GPUs): {args.tokens_per_iter:,}")
-    print(f"Iterations for 1 epoch: {total_tokens / args.tokens_per_iter:.0f}")
+    print(f"Iterations for {args.epochs} epoch{'s' if args.epochs != 1 else ''}: {iterations:.0f}")
     print(f"{'=' * 60}")
 
 if __name__ == "__main__":
