@@ -40,19 +40,15 @@ class Rotary(nn.Module):
 
 class CausalSelfAttentionBatched(nn.Module):
     """Standard batched causal attention - no FlexAttention constraints
-    
-    This version supports arbitrary batch sizes and uses standard PyTorch
-    attention mechanisms instead of FlexAttention.
     """
     def __init__(self, dim: int, num_heads: int, max_seq_len: int, head_dim=128):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = head_dim
         hdim = num_heads * head_dim
-        # Same weight structure as FlexAttention version
         self.qkvo_w = nn.Parameter(torch.empty(4, hdim, dim).bfloat16())
         self.rotary = Rotary(head_dim, max_seq_len)
-        self.attn_scale = 0.12  # Same as original
+        self.attn_scale = 0.12
         self.max_seq_len = max_seq_len
 
     def forward(self, x: Tensor, ve: Tensor | None, sa_lambdas: Tensor):
@@ -64,7 +60,6 @@ class CausalSelfAttentionBatched(nn.Module):
             sa_lambdas: Self-attention lambdas [2] for mixing v with ve
         """
         B, T, D = x.shape
-        # No batch size = 1 restriction!
         
         qkv = F.linear(x, self.qkvo_w[:3].flatten(end_dim=1)).view(B, T, 3 * self.num_heads, self.head_dim)
         q, k, v = qkv.chunk(3, dim=-2)
@@ -74,7 +69,6 @@ class CausalSelfAttentionBatched(nn.Module):
         q, k = self.rotary(q), self.rotary(k)
         v = norm(v)
         
-        # CRITICAL: Mix in value embeddings like the original model
         if ve is not None:
             v = sa_lambdas[0] * v + sa_lambdas[1] * ve.view_as(v)
         else:
@@ -124,7 +118,6 @@ class BlockBatched(nn.Module):
     """Block using standard batched attention"""
     def __init__(self, dim: int, num_heads: int, max_seq_len: int, layer_idx: int):
         super().__init__()
-        # Skip attention at layer 7 (same as original)
         self.attn = CausalSelfAttentionBatched(dim, num_heads, max_seq_len) if layer_idx != 7 else None
         self.mlp = MLP(dim)
 
@@ -166,7 +159,6 @@ class GPTBatched(nn.Module):
         # Initialize embeddings
         self.embed = nn.Embedding(vocab_size, model_dim)
         
-        # CRITICAL: Add value embeddings like original model
         self.value_embeds = nn.ModuleList([
             nn.Embedding(vocab_size, model_dim) for _ in range(3)
         ])
@@ -182,7 +174,7 @@ class GPTBatched(nn.Module):
         self.scalars = nn.Parameter(torch.cat([
             torch.ones(num_layers),  # skip_weights
             *[torch.tensor([1.0, 0.0]) for _ in range(num_layers)],  # block lambdas
-            *[torch.tensor([0.5, 0.5]) for _ in range(num_layers)],  # SA lambdas (CRITICAL!)
+            *[torch.tensor([0.5, 0.5]) for _ in range(num_layers)],
         ]))
     
     @staticmethod
@@ -213,7 +205,6 @@ class GPTBatched(nn.Module):
         # Copy embedding weights
         batched_model.embed.weight.data.copy_(original_gpt.embed.weight.data)
         
-        # CRITICAL: Copy value embedding weights
         for i, (old_ve, new_ve) in enumerate(zip(original_gpt.value_embeds, batched_model.value_embeds)):
             new_ve.weight.data.copy_(old_ve.weight.data)
         
@@ -550,13 +541,12 @@ class GPTClassification(nn.Module):
 class GPTFlexAttention(nn.Module):
     """Minimal implementation to load FlexAttention checkpoints
     
-    This is just for loading weights - not for actual use.
+    This is just for loading weights, not for actual use.
     """
     def __init__(self, vocab_size: int, num_layers: int, num_heads: int, model_dim: int, max_seq_len: int):
         super().__init__()
         from torch.nn.attention.flex_attention import BlockMask, flex_attention
         
-        # Simplified version - just enough to load state dict
         self.embed = nn.Embedding(vocab_size, model_dim)
         self.value_embeds = nn.ModuleList([nn.Embedding(vocab_size, model_dim) for _ in range(3)])
         

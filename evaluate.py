@@ -103,21 +103,7 @@ def print_results(preds, labels, dataset_name):
 def main():
     parser = argparse.ArgumentParser(
         description="Evaluate fine-tuned model on test data",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Evaluate on multiple datasets with custom labels
-  python evaluate.py --checkpoint_path model.pt --datasets iggy12345/xnli-en-ipa iggy12345/xnli-es-ipa --dataset_labels English Spanish
-  
-  # Evaluate on a single dataset
-  python evaluate.py --checkpoint_path model.pt --datasets my-org/my-dataset
-  
-  # Evaluate with custom split and config
-  python evaluate.py --checkpoint_path model.pt --datasets glue --dataset_config mrpc --split validation
-  
-  # Use default XNLI datasets (backward compatibility)
-  python evaluate.py --checkpoint_path model.pt
-        """
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
     # Required
@@ -151,7 +137,7 @@ Examples:
     
     # Setup datasets to evaluate
     if args.datasets is None:
-        # Default to original XNLI datasets for backward compatibility
+        # Default to XNLI datasets
         datasets_to_eval = [
             ('iggy12345/xnli-en-ipa', 'English'),
             ('iggy12345/xnli-es-ipa', 'Spanish')
@@ -228,7 +214,7 @@ Examples:
     model.to(args.device)
     model.eval()
     
-    print(f"✓ Model loaded successfully")
+    print(f"  Model loaded successfully")
     print(f"  Val loss at save: {checkpoint['val_loss']:.4f}")
     print(f"  Val accuracy at save: {checkpoint['val_accuracy']:.4f}")
     print(f"  Val F2 at save: {checkpoint['val_f2']:.4f}")
@@ -256,7 +242,7 @@ Examples:
             else:
                 test_dataset = load_dataset(dataset_name, split=args.split)
             
-            print(f"✓ Loaded {len(test_dataset)} examples")
+            print(f"  Loaded {len(test_dataset)} examples")
             print(f"  Dataset features: {list(test_dataset.features.keys())}")
             print(f"  Using text columns: {text_columns}")
             print(f"  Using label column: {ckpt_args['label_column']}")
@@ -270,13 +256,13 @@ Examples:
                 missing_cols.append(ckpt_args['label_column'])
             
             if missing_cols:
-                print(f"⚠ WARNING: Missing columns in dataset: {missing_cols}")
+                print(f"X Missing columns in dataset: {missing_cols}")
                 print(f"  Available columns: {list(test_dataset.features.keys())}")
                 print(f"  Skipping this dataset.")
                 continue
                 
         except Exception as e:
-            print(f"✗ Error loading dataset: {e}")
+            print(f"X Error loading dataset: {e}")
             print(f"  Skipping this dataset.")
             continue
         
@@ -306,7 +292,7 @@ Examples:
                 'confusion_matrix': cm.tolist()
             }
         except Exception as e:
-            print(f"✗ Error during evaluation: {e}")
+            print(f"X Error during evaluation: {e}")
             print(f"  Skipping this dataset.")
             continue
     
@@ -336,7 +322,7 @@ Examples:
             # Single dataset - use its label
             output_file = args.output_dir / f"results_{list(all_results.keys())[0].lower().replace(' ', '_')}.json"
         else:
-            # Multiple datasets - use checkpoint name
+            # Multiple datasets
             checkpoint_type = args.checkpoint_path.stem
             output_file = args.output_dir / f"results_{checkpoint_type}.json"
         
@@ -357,8 +343,8 @@ Examples:
         import json
         with open(output_file, 'w') as f:
             json.dump(results_full, f, indent=2)
-        print(f"\n✓ Detailed results saved to {output_file}")
-    
+        print(f"\nResults saved to {output_file}")
+
     print("="*80)
     
     # Return success status

@@ -130,8 +130,8 @@ def load_pretrained_model(args, model):
     model.pretrained_model = pretrained_batched
     model.to(args.device)
     
-    print(f"✓ Successfully converted FlexAttention model to batched version")
-    print(f"✓ Batch size: {model.batch_size} (was 1 in FlexAttention)")
+    print(f"converted FlexAttention model to batched version")
+    print(f"Batch size: {model.batch_size} (was 1 in FlexAttention)")
     
     # Set up scaler and optimizer
     device_type = 'cuda' if 'cuda' in args.device else 'cpu'

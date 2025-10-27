@@ -11,11 +11,6 @@ from datasets import load_dataset
 from tqdm import tqdm
 
 def write_datafile(filename, toks):
-    """ 
-    Saves token data as a .bin file, for reading in C.
-    - header with 256 int32s
-    - tokens follow, each as a uint16
-    """
     assert len(toks) < 2**31, "token count too large"
     # construct the header
     header = np.zeros(256, dtype=np.int32)
