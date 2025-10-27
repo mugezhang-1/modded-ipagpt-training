@@ -22,14 +22,14 @@ def check_model_architecture(checkpoint_path):
     embed_shape = ckpt['model']['_orig_mod.embed.weight'].shape
     vocab_size, model_dim = embed_shape
     print(f"Embedding shape: {embed_shape}")
-    print(f"  → Vocab size: {vocab_size}")
-    print(f"  → Model dimension: {model_dim}")
+    print(f"Vocab size: {vocab_size}")
+    print(f"Model dimension: {model_dim}")
     
     # Get LM head shape
     lm_head_shape = ckpt['model']['_orig_mod.lm_head_w'].shape
     print(f"\nLM head shape: {lm_head_shape}")
     
-    # Count number of blocks (layers)
+    # Count number of blocks
     num_blocks = sum(1 for k in ckpt['model'].keys() if 'blocks.' in k and 'mlp.fc_w' in k)
     print(f"\nNumber of layers: {num_blocks}")
     
@@ -38,8 +38,8 @@ def check_model_architecture(checkpoint_path):
     head_dim = 128  # Standard head dimension
     num_heads = qkvo_shape[1] // head_dim // 4
     print(f"\nQKVO weight shape: {qkvo_shape}")
-    print(f"  → Number of heads: {num_heads}")
-    print(f"  → Head dimension: {head_dim}")
+    print(f"Number of heads: {num_heads}")
+    print(f"Head dimension: {head_dim}")
     
     print("\n" + "="*60)
     print("FINETUNE.PY ARGUMENTS")
@@ -48,7 +48,7 @@ def check_model_architecture(checkpoint_path):
     print(f"--n_embd {model_dim}")
     print(f"--n_layer {num_blocks}")
     print(f"--n_head {num_heads}")
-    print(f"--block_size 1024  # (verify this matches your training)")
+    print(f"--block_size 1024")
     print("="*60)
 
 if __name__ == "__main__":
