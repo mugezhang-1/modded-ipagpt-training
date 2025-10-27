@@ -1,4 +1,4 @@
-# Modded NanoGPT - Custom Training Pipeline
+# Modded NanoGPT Custom Training Pipeline
 
 A modified NanoGPT implementation optimized for custom tokenizer pretraining and classification fine-tuning.
 
@@ -8,18 +8,18 @@ The training pipeline follows these steps:
 
 **Step 1:** Clone this repository  
 **Step 2:** Set up the conda environment  
-**Step 3:** Preprocess your HuggingFace dataset with a custom tokenizer → generates .bin files  
+**Step 3:** Preprocess your HuggingFace dataset with a custom tokenizer (generates .bin files)  
 **Step 4:** Pretrain the GPT model using the .bin files (requires 8 GPUs)  
 **Step 5:** Fine-tune the pretrained model on a classification task (e.g., XNLI)  
 **Step 6:** Evaluate the fine-tuned model on test data  
 
 ## Step 1: Clone Repository
 
-Clone this repository to your local machine:
+Clone this repository:
 
 ```bash
-git clone https://github.com/mugezhang-1/modded-nanogpt.git
-cd modded-nanogpt
+git clone https://github.com/mugezhang-1/modded-ipagpt-training.git
+cd modded-ipagpt-training
 ```
 
 ## Step 2: Environment Setup
@@ -87,22 +87,16 @@ Train the GPT model from scratch using your preprocessed `.bin` files on an 8-GP
 First, determine how many training iterations you need by counting tokens in your dataset:
 
 ```bash
-python utils/count_tokens.py   --data_dir /path/to/your/tokenized/data
-```
-
-**Example:**
-
-```bash
-python utils/count_tokens.py   --data_dir /fs/scratch/PAS2836/mugezhang/ipa_gpt_data/tokenized_bin_headered/headered_tokenized_bin_eng_spa_normal
+python count_tokens.py --data_dir /path/to/data --epochs 3 --tokens_per_iter 524288
 ```
 
 The script will output:
 
 - Token count per training file  
 - Total training tokens  
-- Recommended iterations for 1 epoch (based on 524,288 tokens per iteration for 8 GPUs)
+- Iterations for specified epochs (based on 524,288 tokens per iteration for 8 GPUs, which is the default in the pretraining script)
 
-> **Note:** We recommend training for at least **3 epochs**. Multiply the iterations for 1 epoch by 3 to get your `--num_iterations` value.
+> **Note:** We recommend training for at least **3 epochs**.
 
 ---
 
