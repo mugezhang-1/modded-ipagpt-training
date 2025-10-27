@@ -13,18 +13,16 @@ from tqdm import tqdm
 def write_datafile(filename, toks):
     """ 
     Saves token data as a .bin file, for reading in C.
-    - First comes a header with 256 int32s
-    - The tokens follow, each as a uint16
+    - header with 256 int32s
+    - tokens follow, each as a uint16
     """
-    assert len(toks) < 2**31, "token count too large" # ~2.1B tokens
+    assert len(toks) < 2**31, "token count too large"
     # construct the header
     header = np.zeros(256, dtype=np.int32)
     header[0] = 20240520 # magic
     header[1] = 1 # version
     header[2] = len(toks) # number of tokens after the 256*4 bytes of header (each 2 bytes as uint16)
-    # construct the tokens numpy array, if not already
     if not isinstance(toks, np.ndarray) or not toks.dtype == np.uint16:
-        # validate that no token exceeds a uint16
         maxtok = 2**16
         assert all(0 <= t < maxtok for t in toks), "token dictionary too large for uint16"
         toks_np = np.array(toks, dtype=np.uint16)
@@ -52,20 +50,19 @@ args = parser.parse_args()
 # create the output directory if it doesn't exist
 os.makedirs(args.output_dir, exist_ok=True)
 
-# download/load the dataset
+# download/load dataset
 print(f"Loading dataset: {args.dataset}")
 if args.dataset_config:
-    print(f"  Config: {args.dataset_config}")
+    print(f"Config: {args.dataset_config}")
     dataset = load_dataset(args.dataset, name=args.dataset_config, split=args.split)
 else:
     dataset = load_dataset(args.dataset, split=args.split)
-print(f"  Split: {args.split}")
-print(f"  Size: {len(dataset)} documents")
+print(f"Split: {args.split}")
+print(f"Size: {len(dataset)} documents")
 
 # initialize the tokenizer
 print(f"Loading tokenizer: {args.tokenizer}")
 if args.tokenizer in ["gpt2", "cl100k_base", "o200k_base"]:
-    # Use tiktoken pre-trained tokenizer
     enc = tiktoken.get_encoding(args.tokenizer)
     eot = enc._special_tokens['<|endoftext|>'] if args.eot_token is None else args.eot_token
     
@@ -83,7 +80,7 @@ else:
         from tokenizers import Tokenizer
         enc = Tokenizer.from_file(args.tokenizer)
         vocab_size = enc.get_vocab_size()
-        print(f"  Custom tokenizer loaded with vocab size: {vocab_size}")
+        print(f"Custom tokenizer loaded with vocab size: {vocab_size}")
         
         # Try to detect EOT token
         if args.eot_token is None:
@@ -91,10 +88,10 @@ else:
             for token_name in ['<|endoftext|>', '[EOS]', '</s>', '<eos>']:
                 eot = enc.token_to_id(token_name)
                 if eot is not None:
-                    print(f"  Auto-detected EOT token: '{token_name}' (ID: {eot})")
+                    print(f"Auto-detected EOT token: '{token_name}' (ID: {eot})")
                     break
             if eot is None:
-                print("  Warning: Could not auto-detect EOT token. Using ID 0. Specify with --eot_token if needed.")
+                print("Warning: Could not auto-detect EOT token. Using ID 0. Specify with --eot_token if needed.")
                 eot = 0
         else:
             eot = args.eot_token
@@ -127,18 +124,15 @@ print(f"Using {nprocs} processes for tokenization")
 
 with mp.Pool(nprocs) as pool:
     shard_index = 0
-    # preallocate buffer to hold current shard
     all_tokens_np = np.empty((args.shard_size,), dtype=np.uint16)
     token_count = 0
     progress_bar = None
     
     for tokens in pool.imap(tokenize, dataset, chunksize=16):
-        # enough space in the current shard for the new tokens?
         if token_count + len(tokens) < args.shard_size:
             # simply append tokens to current shard
             all_tokens_np[token_count:token_count+len(tokens)] = tokens
             token_count += len(tokens)
-            # update progress bar
             if progress_bar is None:
                 progress_bar = tqdm(total=args.shard_size, unit="tokens", desc=f"Shard {shard_index}")
             progress_bar.update(len(tokens))
