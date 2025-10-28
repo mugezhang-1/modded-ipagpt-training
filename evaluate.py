@@ -56,7 +56,8 @@ def evaluate(model, dataset, ctx, device, batch_size=32):
         # Forward pass
         with torch.no_grad():
             with ctx:
-                logits = model(input_ids)
+                attention_mask = (input_ids != model.pad_token_id).long()
+                logits = model(input_ids, attention_mask=attention_mask)
                 preds = logits.argmax(dim=-1)
                 
                 all_preds.extend(preds.cpu().numpy())

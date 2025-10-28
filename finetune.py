@@ -200,7 +200,8 @@ def finetune(model, max_iters, scaler, optimizer, ctx, best_val_loss, best_check
         # Gradient accumulation loop
         for micro_step in range(args.gradient_accumulation_steps):
             with ctx:
-                logits, loss = model(X, Y)
+                attention_mask = (X != model.pad_token_id).long()
+                logits, loss = model(X, attention_mask=attention_mask, labels=Y)
                 loss = loss / args.gradient_accumulation_steps
             
             X, Y = get_batch('train')

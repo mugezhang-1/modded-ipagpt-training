@@ -261,10 +261,13 @@ echo "End: $(date)"
 
 **Important Notes:**
 
-- `--vocab_size` must match the pretrained model (from Step 4)  
-- `--text_column` can accept multiple columns (e.g., `premise hypothesis` for XNLI)  
-- Use `--no_subset` when your HuggingFace dataset doesn't have configuration subsets  
-- The pretrained checkpoint path should point to the final checkpoint from Step 4 (e.g., `state_step050083.pt`)  
+- `--vocab_size` must match the pretrained model (from Step 4)
+- `--text_column` can accept multiple columns (e.g., `premise hypothesis` for XNLI)
+- Use `--no_subset` when your HuggingFace dataset doesn't have configuration subsets
+- The pretrained checkpoint path should point to the final checkpoint from Step 4 (e.g., `state_step050083.pt`)
+- The model automatically handles padding tokens using attention masks
+  - Sequences are right-padded with token ID 0
+  - The last non-padding token is used for classification pooling  
 
 ---
 

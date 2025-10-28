@@ -328,7 +328,10 @@ class GPTClassification(nn.Module):
         self.train_labels = None
         self.val_data = None
         self.val_labels = None
-        
+
+        # Pad token ID (used for masking padding tokens)
+        self.pad_token_id = 0  # Tokenizer pads with 0
+
         # Pretrained model (to be loaded)
         self.pretrained_model = None
         
@@ -341,23 +344,35 @@ class GPTClassification(nn.Module):
             nn.Linear(num_embed // 2, num_classes)
         )
     
-    def forward(self, input_ids, labels=None):
+    def forward(self, input_ids, attention_mask=None, labels=None):
         """Forward pass for classification
-        
+
         Args:
             input_ids: Input token IDs [B, T]
+            attention_mask: Attention mask [B, T] (optional). 1 for real tokens, 0 for padding.
+                          If None, computed from input_ids using pad_token_id.
             labels: Labels [B] (optional)
-            
+
         Returns:
             If labels provided: (logits, loss)
             Otherwise: logits
         """
         # Get features from pretrained model
         features = self.pretrained_model.forward_features(input_ids)  # [B, T, D]
-        
-        # Pool features (use mean pooling over sequence)
-        pooled = features.mean(dim=1)  # [B, D]
-        
+
+        # Compute attention mask if not provided
+        if attention_mask is None:
+            attention_mask = (input_ids != self.pad_token_id).long()
+
+        # Find the last non-padding token for each sequence
+        # This handles both left and right padding by taking the rightmost non-pad token
+        batch_size = input_ids.shape[0]
+        token_indices = torch.arange(input_ids.shape[1], device=input_ids.device)
+        last_non_pad_indices = (token_indices * attention_mask).argmax(dim=1)
+
+        # Pool using the last non-padding token (standard for causal models)
+        pooled = features[torch.arange(batch_size, device=features.device), last_non_pad_indices]
+
         # Classification head
         logits = self.classifier(pooled)  # [B, num_classes]
         
