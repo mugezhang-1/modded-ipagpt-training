@@ -175,7 +175,7 @@ echo "End: $(date)"
 
 ### 4.4: Submit the Job
 
-Submit your SLURM job:
+Submit your SLURM job (on the Cardinal cluster to avoid the “more processors requested than permitted” error when using the template SLURM script above):
 
 ```bash
 sbatch train_job.slurm
