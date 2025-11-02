@@ -334,7 +334,7 @@ class GPTClassification(nn.Module):
 
         # Pretrained model (to be loaded)
         self.pretrained_model = None
-        
+
         # Classification head
         self.classifier = nn.Sequential(
             nn.Dropout(dropout),
@@ -343,6 +343,9 @@ class GPTClassification(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(num_embed // 2, num_classes)
         )
+
+        # Class weights for handling imbalanced datasets (will be computed from training data)
+        self.class_weights = None
     
     def forward(self, input_ids, attention_mask=None, labels=None):
         """Forward pass for classification
@@ -375,9 +378,10 @@ class GPTClassification(nn.Module):
 
         # Classification head
         logits = self.classifier(pooled)  # [B, num_classes]
-        
+
         if labels is not None:
-            loss = F.cross_entropy(logits, labels)
+            # Use class weights if available to handle imbalanced datasets
+            loss = F.cross_entropy(logits, labels, weight=self.class_weights)
             return logits, loss
         return logits
     
@@ -394,17 +398,20 @@ class GPTClassification(nn.Module):
         # Load data once into memory
         print(f"Loading training data into memory...")
         self._load_data_into_memory()
+
+        # Compute class weights to handle imbalanced datasets
+        self._compute_class_weights()
     
     def _load_data_into_memory(self):
         """Load all data into memory once"""
         print(f"Loading train data from {self.train_data_path}...")
         with open(self.train_data_path, 'rb') as f:
             num_examples = np.fromfile(f, dtype=np.int32, count=1)[0]
-            self.train_data = np.fromfile(f, dtype=np.int32, 
+            self.train_data = np.fromfile(f, dtype=np.int32,
                                          count=num_examples * self.context_window).reshape(num_examples, self.context_window)
             self.train_labels = np.fromfile(f, dtype=np.int64, count=num_examples)
         print(f"Loaded {len(self.train_data)} training examples")
-        
+
         print(f"Loading val data from {self.val_data_path}...")
         with open(self.val_data_path, 'rb') as f:
             num_examples = np.fromfile(f, dtype=np.int32, count=1)[0]
@@ -412,6 +419,38 @@ class GPTClassification(nn.Module):
                                        count=num_examples * self.context_window).reshape(num_examples, self.context_window)
             self.val_labels = np.fromfile(f, dtype=np.int64, count=num_examples)
         print(f"Loaded {len(self.val_data)} validation examples")
+
+    def _compute_class_weights(self):
+        """Compute class weights from training data to handle imbalanced datasets
+
+        Uses inverse frequency weighting: weight_i = total_samples / (num_classes * count_i)
+        This ensures minority classes get higher weights in the loss function.
+        """
+        if self.train_labels is None:
+            print("Warning: Cannot compute class weights - training labels not loaded")
+            return
+
+        # Count samples per class
+        unique_labels, counts = np.unique(self.train_labels, return_counts=True)
+        print(f"\nClass distribution in training data:")
+        for label, count in zip(unique_labels, counts):
+            percentage = 100.0 * count / len(self.train_labels)
+            print(f"  Class {label}: {count:,} samples ({percentage:.2f}%)")
+
+        # Compute inverse frequency weights
+        total_samples = len(self.train_labels)
+        weights = np.zeros(self.num_classes, dtype=np.float32)
+
+        for label, count in zip(unique_labels, counts):
+            weights[label] = total_samples / (self.num_classes * count)
+
+        # Convert to tensor and move to device
+        self.class_weights = torch.tensor(weights, dtype=torch.float32, device=self.device)
+
+        print(f"\nComputed class weights (for balanced loss):")
+        for i, weight in enumerate(weights):
+            print(f"  Class {i}: {weight:.4f}")
+        print()
     
     def _tokenize_and_save(self, dataset, save_path):
         """Tokenize dataset and save to binary file
@@ -489,17 +528,18 @@ class GPTClassification(nn.Module):
         """Estimate loss on train and val sets"""
         out = {}
         self.eval()
-        
+
         for split in ['train', 'val']:
             losses = []
             accuracies = []
             f2_scores = []
-            
+
             for _ in range(eval_iters):
                 with torch.no_grad():
                     with ctx:
                         X, Y = self.get_batch(split)
-                        logits, loss = self(X, Y)
+                        attention_mask = (X != self.pad_token_id).long()
+                        logits, loss = self(X, attention_mask=attention_mask, labels=Y)
                         
                         # Calculate accuracy
                         preds = logits.argmax(dim=-1)
