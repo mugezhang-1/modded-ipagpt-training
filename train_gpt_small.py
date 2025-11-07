@@ -6,6 +6,8 @@ import uuid
 import time
 import copy
 import glob
+import argparse
+import itertools
 from dataclasses import dataclass
 from functools import lru_cache, partial # Added partial for hook registration
 from pathlib import Path
@@ -522,7 +524,7 @@ def distributed_data_generator(filename_pattern: str, batch_size: int, rank : in
     files = [Path(file) for file in sorted(glob.glob(filename_pattern))]
     assert batch_size % world_size == 0
     local_batch_size = batch_size // world_size
-    file_iter = iter(files) # use itertools.cycle(files) instead if you want to do multi-epoch training
+    file_iter = itertools.cycle(files)
     tokens, pos = _load_data_shard(next(file_iter)), 0
     while True:
         if pos + batch_size + 1 >= len(tokens):
@@ -542,6 +544,7 @@ class Hyperparameters:
     train_files = "data/fineweb10B/fineweb_train_*.bin" # input .bin to train on
     val_files = "data/fineweb10B/fineweb_val_*.bin" # input .bin to eval validation loss on
     val_tokens = 10485760 # how many tokens of validation data? it's important to keep this fixed for consistent comparisons
+    vocab_size = next_multiple_of_n(50257, n=128) # vocabulary size
     # optimization
     num_iterations = 1770 # number of iterations to run
     cooldown_frac = 0.4 # fraction of training spent cooling down the learning rate
@@ -551,7 +554,49 @@ class Hyperparameters:
     seq_len = 48*1024 # FlexAttention sequence length
     val_seq_len = 4*64*1024 # FlexAttention sequence length for validation
     save_checkpoint = False
+    output_dir = "logs"
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train GPT model with custom datasets")
+    parser.add_argument("--train_files", type=str, default=None, 
+                        help="Pattern for training .bin files (e.g., 'data/my_data/data_train_*.bin')")
+    parser.add_argument("--val_files", type=str, default=None,
+                        help="Pattern for validation .bin files (e.g., 'data/my_data/data_val_*.bin')")
+    parser.add_argument("--vocab_size", type=int, default=None,
+                        help="Vocabulary size (must match your tokenizer)")
+    parser.add_argument("--val_tokens", type=int, default=None,
+                        help="Number of validation tokens to use")
+    parser.add_argument("--num_iterations", type=int, default=None,
+                        help="Number of training iterations")
+    parser.add_argument("--val_loss_every", type=int, default=None,
+                        help="Evaluate validation loss every N steps (0 for only at end)")
+    parser.add_argument("--save_checkpoint", action="store_true",
+                        help="Save model checkpoints")
+    parser.add_argument("--output_dir", type=str, default=None,
+                        help="Directory to save checkpoints and logs")
+    return parser.parse_args()
+
+# Parse command line arguments and override defaults
+cli_args = parse_args()
 args = Hyperparameters()
+
+# Override defaults with command line arguments if provided
+if cli_args.train_files is not None:
+    args.train_files = cli_args.train_files
+if cli_args.val_files is not None:
+    args.val_files = cli_args.val_files
+if cli_args.vocab_size is not None:
+    args.vocab_size = next_multiple_of_n(cli_args.vocab_size, n=128)
+if cli_args.val_tokens is not None:
+    args.val_tokens = cli_args.val_tokens
+if cli_args.num_iterations is not None:
+    args.num_iterations = cli_args.num_iterations
+if cli_args.val_loss_every is not None:
+    args.val_loss_every = cli_args.val_loss_every
+if cli_args.save_checkpoint:
+    args.save_checkpoint = True
+if cli_args.output_dir is not None:
+    args.output_dir = cli_args.output_dir
 
 # torchrun sets these env variables
 rank = int(os.environ["RANK"])
@@ -570,8 +615,8 @@ master_process = (rank == 0) # this process will do logging, checkpointing etc.
 logfile = None
 if master_process:
     run_id = uuid.uuid4()
-    os.makedirs("logs", exist_ok=True)
-    logfile = f"logs/{run_id}.txt"
+    os.makedirs(args.output_dir, exist_ok=True)
+    logfile = os.path.join(args.output_dir, f"{run_id}.txt")
     print(logfile)
 def print0(s, console=True):
     if master_process:
@@ -593,7 +638,7 @@ if master_process:
     print0(nvidia_smi())
 print0("="*100)
 
-model: nn.Module = GPT(vocab_size=next_multiple_of_n(50257, n=128), num_layers=12, num_heads=6, model_dim=768, max_seq_len=max(args.seq_len, args.val_seq_len)).cuda()
+model: nn.Module = GPT(vocab_size=args.vocab_size, num_layers=12, num_heads=6, model_dim=768, max_seq_len=max(args.seq_len, args.val_seq_len)).cuda()
 for m in model.modules():
     if isinstance(m, nn.Embedding):
         m.bfloat16()
@@ -723,8 +768,9 @@ for step in range(train_steps + 1):
     if last_step:
         if master_process and args.save_checkpoint:
             log = dict(step=step, code=code, model=model.state_dict(), optimizers=[opt.state_dict() for opt in optimizers])
-            os.makedirs(f"logs/{run_id}", exist_ok=True)
-            torch.save(log, f"logs/{run_id}/state_step{step:06d}.pt")
+            checkpoint_dir = os.path.join(args.output_dir, str(run_id))
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            torch.save(log, os.path.join(checkpoint_dir, f"state_step{step:06d}.pt"))
         # the last step only has the validation loop, so break to avoid training
         break
 
