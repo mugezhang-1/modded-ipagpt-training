@@ -10,3 +10,5 @@ checkpoints/
 .idea/
 .vscode/
 evaluation_results/
+logs/
+traces/

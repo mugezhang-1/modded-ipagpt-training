@@ -5,11 +5,12 @@ with open(sys.argv[0]) as f:
 import uuid
 import time
 import copy
-import glob
 import argparse
+import random
+import glob as glob_module
 import itertools
 from dataclasses import dataclass
-from functools import lru_cache, partial # Added partial for hook registration
+from functools import lru_cache
 from pathlib import Path
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -520,14 +521,20 @@ def _load_data_shard(file: Path):
         assert nbytes == 2 * num_tokens, "number of tokens read does not match header"
     return tokens
 
-def distributed_data_generator(filename_pattern: str, batch_size: int, rank : int, world_size : int):
-    files = [Path(file) for file in sorted(glob.glob(filename_pattern))]
+def distributed_data_generator(filename_pattern: str, batch_size: int, rank : int, world_size : int, seed: int = 0):
+    files = sorted(Path(p) for p in glob_module.glob(filename_pattern))
+    
+    # Shuffle files based on seed for multi-epoch training
+    if seed != 0:
+        rng = random.Random(seed)
+        rng.shuffle(files)
+
     assert batch_size % world_size == 0
     local_batch_size = batch_size // world_size
     file_iter = itertools.cycle(files)
     tokens, pos = _load_data_shard(next(file_iter)), 0
     while True:
-        if pos + batch_size + 1 >= len(tokens):
+        if pos + batch_size + 1 > len(tokens):
             tokens, pos = _load_data_shard(next(file_iter)), 0
         buf = tokens[pos + rank * local_batch_size:][:local_batch_size + 1]
         inputs = buf[:-1].to(device="cuda", dtype=torch.int32, non_blocking=True) # no sync on host side;
@@ -598,6 +605,7 @@ if cli_args.save_checkpoint:
 if cli_args.output_dir is not None:
     args.output_dir = cli_args.output_dir
 
+run_id = int(os.environ.get("RUN_ID", 0))
 # torchrun sets these env variables
 rank = int(os.environ["RANK"])
 world_size = int(os.environ["WORLD_SIZE"])
@@ -608,22 +616,29 @@ dist.init_process_group(backend="nccl", device_id=device)
 dist.barrier()
 master_process = (rank == 0) # this process will do logging, checkpointing etc.
 
-#if master_process:
-#    wandb.init(project="modded-nanogpt-tiny", name=f"run-{os.path.basename(__file__)}", save_code=True)
-
 # begin logging
-logfile = None
 if master_process:
-    run_id = uuid.uuid4()
-    os.makedirs(args.output_dir, exist_ok=True)
-    logfile = os.path.join(args.output_dir, f"{run_id}.txt")
+    run_id_full = f"{run_id:03d}_{uuid.uuid4()}"
+    output_dir = cli_args.output_dir if cli_args.output_dir else "logs"
+    os.makedirs(output_dir, exist_ok=True)
+    logfile = f"{output_dir}/{run_id_full}.txt"
     print(logfile)
-def print0(s, console=True):
+def print0(s, console=False):
     if master_process:
         with open(logfile, "a") as f:
             if console:
                 print(s)
             print(s, file=f)
+from torch._logging._internal import trace_structured # noqa: E402
+import torch._inductor.codecache # noqa: E402
+import torch._inductor.graph # noqa: E402
+def _patched_trace_structured(name, metadata_fn, **kwargs):
+    if name == "inductor_output_code":
+        fn = metadata_fn().get("filename", "Unknown")
+        print0(f"inductor_output_code: {fn}")
+    trace_structured(name, metadata_fn, **kwargs)
+torch._inductor.codecache.trace_structured = _patched_trace_structured
+torch._inductor.graph.trace_structured = _patched_trace_structured
 
 # begin by printing this file (the Python code)
 print0(code)
@@ -636,6 +651,16 @@ def nvidia_smi():
     return subprocess.run(["nvidia-smi"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout
 if master_process:
     print0(nvidia_smi())
+print0("="*100)
+# Log the configuration
+print0(f"Configuration:")
+print0(f"  train_files: {args.train_files}")
+print0(f"  val_files: {args.val_files}")
+print0(f"  vocab_size: {args.vocab_size}")
+print0(f"  val_tokens: {args.val_tokens}")
+print0(f"  num_iterations: {args.num_iterations}")
+print0(f"  val_loss_every: {args.val_loss_every}")
+print0(f"  save_checkpoint: {args.save_checkpoint}")
 print0("="*100)
 
 model: nn.Module = GPT(vocab_size=args.vocab_size, num_layers=12, num_heads=6, model_dim=768, max_seq_len=max(args.seq_len, args.val_seq_len)).cuda()
@@ -655,8 +680,8 @@ head_params = [model.lm_head.weight]
 # small adam epsilon by @YouJiacheng. this is an alternate method of fixing the world_size dependence
 # discovered by @fernbear.bsky.social https://x.com/hi_tysam/status/1879692937589875094
 
-optimizer1 = DistAdam(scalar_params + head_params + embed_params, lr=0.008, betas=(0.8, 0.95), eps=1e-10, weight_decay=0.0, rank=rank, world_size=world_size)
-optimizer2 = Muon(hidden_matrix_params, lr=0.05, momentum=0.95, rank=rank, world_size=world_size, weight_decay=0.0)
+optimizer1 = DistAdam(scalar_params + head_params + embed_params, lr=0.004, betas=(0.8, 0.95), eps=1e-10, weight_decay=0.0, rank=rank, world_size=world_size)
+optimizer2 = Muon(hidden_matrix_params, lr=0.025, momentum=0.95, rank=rank, world_size=world_size, weight_decay=0.0)
 optimizers = [optimizer1, optimizer2]
 
 for opt in optimizers:
@@ -703,7 +728,7 @@ model: nn.Module = torch.compile(model, dynamic=False)
 warmup_steps = 10
 initial_state = dict(model=copy.deepcopy(model.state_dict()),
                      optimizers=[copy.deepcopy(opt.state_dict()) for opt in optimizers]) # save the initial state
-train_loader = distributed_data_generator(args.train_files, world_size * args.seq_len, rank, world_size)
+train_loader = distributed_data_generator(args.train_files, world_size * args.seq_len, rank, world_size, seed=run_id)
 for _ in range(warmup_steps):
     inputs, targets = next(train_loader)
     model(inputs, targets, get_window_size_blocks(1)).backward()
@@ -730,7 +755,7 @@ for opt, opt_state in zip(optimizers, initial_state['optimizers']):
     opt.load_state_dict(opt_state)
 del train_loader, initial_state
 
-train_loader = distributed_data_generator(args.train_files, world_size * args.seq_len, rank, world_size)
+train_loader = distributed_data_generator(args.train_files, world_size * args.seq_len, rank, world_size, seed=run_id)
 training_time_ms = 0
 # start the clock
 torch.cuda.synchronize()
@@ -748,7 +773,7 @@ for step in range(train_steps + 1):
         val_batch_size = world_size * args.val_seq_len
         assert args.val_tokens % val_batch_size == 0
         val_steps = args.val_tokens // val_batch_size
-        val_loader = distributed_data_generator(args.val_files, val_batch_size, rank, world_size)
+        val_loader = distributed_data_generator(args.val_files, val_batch_size, rank, world_size, seed=42)
         val_loss = 0
         with torch.no_grad():
             for _ in range(val_steps):
@@ -768,9 +793,8 @@ for step in range(train_steps + 1):
     if last_step:
         if master_process and args.save_checkpoint:
             log = dict(step=step, code=code, model=model.state_dict(), optimizers=[opt.state_dict() for opt in optimizers])
-            checkpoint_dir = os.path.join(args.output_dir, str(run_id))
-            os.makedirs(checkpoint_dir, exist_ok=True)
-            torch.save(log, os.path.join(checkpoint_dir, f"state_step{step:06d}.pt"))
+            os.makedirs(f"{output_dir}/{run_id_full}", exist_ok=True)
+            torch.save(log, f"{output_dir}/{run_id_full}/state_step{step:06d}.pt")
         # the last step only has the validation loop, so break to avoid training
         break
 
