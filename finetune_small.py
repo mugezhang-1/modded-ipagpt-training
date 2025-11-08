@@ -10,7 +10,7 @@ import numpy as np
 import torch
 import wandb
 
-from small_model import GPTBatchedSmall, GPTClassificationSmall, GPTFlexAttentionSmall
+from model_small import GPTBatchedSmall, GPTClassificationSmall, GPTFlexAttentionSmall
 
 def configure_device(args):
     """Configure device, random seed, and mixed precision context"""

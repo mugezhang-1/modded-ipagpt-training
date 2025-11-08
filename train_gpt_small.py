@@ -762,6 +762,8 @@ torch.cuda.synchronize()
 t0 = time.perf_counter()
 # begin training
 train_steps = args.num_iterations
+train_loss_accum = 0.0
+train_loss_steps = 0
 for step in range(train_steps + 1):
     last_step = (step == train_steps)
     # --------------- VALIDATION SECTION -----------------
@@ -782,9 +784,15 @@ for step in range(train_steps + 1):
         val_loss /= val_steps
         del val_loader
         dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
-        #if master_process:
-        #    wandb.log({"val/loss": val_loss}, step=step)
-        print0(f"step:{step}/{train_steps} val_loss:{val_loss:.4f} train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms/max(step, 1):.2f}ms", console=True)
+        # Compute average training loss
+        if train_loss_steps > 0:
+            avg_train_loss = train_loss_accum / train_loss_steps
+            dist.all_reduce(avg_train_loss, op=dist.ReduceOp.AVG)
+            print0(f"step:{step}/{train_steps} train_loss:{avg_train_loss:.4f} val_loss:{val_loss:.4f} train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms/max(step, 1):.2f}ms", console=True)
+            train_loss_accum = 0.0
+            train_loss_steps = 0
+        else:
+            print0(f"step:{step}/{train_steps} val_loss:{val_loss:.4f} train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms/max(step, 1):.2f}ms", console=True)
         model.train()
         # start the clock again
         torch.cuda.synchronize()
@@ -800,7 +808,10 @@ for step in range(train_steps + 1):
 
     # --------------- TRAINING SECTION -----------------
     inputs, targets = next(train_loader)
-    model(inputs, targets, get_window_size_blocks(step)).backward()
+    train_loss = model(inputs, targets, get_window_size_blocks(step))
+    train_loss_accum += train_loss.detach()
+    train_loss_steps += 1
+    train_loss.backward()
     # set optimization hyperparameters
     for opt in optimizers:
         for group in opt.param_groups:
