@@ -617,10 +617,10 @@ class GPTFlexAttentionSmall(nn.Module):
         # Use a simple placeholder for blocks
         self.blocks = nn.ModuleList([self._create_flex_block(model_dim, num_heads, max_seq_len, i) for i in range(num_layers)])
         
-        # LM head - small model uses CastedLinear, we just need a placeholder
-        vocab_size_padded = ((vocab_size // 128) + 1) * 128
+        # LM head - use exact vocab_size without additional padding
+        # The checkpoint already has the properly padded size
         self.lm_head = nn.Module()
-        self.lm_head.weight = nn.Parameter(torch.zeros(vocab_size_padded, model_dim))
+        self.lm_head.weight = nn.Parameter(torch.zeros(vocab_size, model_dim))
         
         # Scalars with potential padding
         self.scalars = nn.Parameter(torch.zeros(5 * num_layers + 8))  # May have padding for world_size=8

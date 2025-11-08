@@ -9,6 +9,7 @@ import inspect
 import numpy as np
 import torch
 import wandb
+import torch.nn as nn
 
 from model_small import GPTBatchedSmall, GPTClassificationSmall, GPTFlexAttentionSmall
 
@@ -99,17 +100,7 @@ def load_pretrained_model(args, model):
     if 'model' not in checkpoint:
         raise ValueError("Checkpoint does not contain 'model' key. Make sure this is a checkpoint from the training script.")
     
-    # Load into temporary FlexAttention model structure
-    print("Loading FlexAttention checkpoint...")
-    pretrained_flex = GPTFlexAttentionSmall(
-        vocab_size=args.vocab_size,
-        num_layers=args.n_layer,
-        num_heads=args.n_head,
-        model_dim=args.n_embd,
-        max_seq_len=args.block_size
-    )
-    
-    # Load the state dict
+    # Get state dict
     state_dict = checkpoint['model']
     
     # Clean up any '_orig_mod.' prefix (from torch.compile)
@@ -118,8 +109,32 @@ def load_pretrained_model(args, model):
         if k.startswith(unwanted_prefix):
             state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
     
+    # INFER vocab_size from checkpoint instead of using args
+    actual_vocab_size = state_dict['embed.weight'].shape[0]
+    actual_scalars_size = state_dict['scalars'].shape[0]
+    
+    print(f"Detected from checkpoint:")
+    print(f"  - Vocab size: {actual_vocab_size} (you specified {args.vocab_size})")
+    print(f"  - Scalars size: {actual_scalars_size}")
+    
+    # Update args to match checkpoint
+    args.vocab_size = actual_vocab_size
+    
+    # Load into temporary FlexAttention model structure
+    print("Loading FlexAttention checkpoint...")
+    pretrained_flex = GPTFlexAttentionSmall(
+        vocab_size=actual_vocab_size,  # Use detected vocab size
+        num_layers=args.n_layer,
+        num_heads=args.n_head,
+        model_dim=args.n_embd,
+        max_seq_len=args.block_size
+    )
+    
+    # Update scalars size to match checkpoint
+    pretrained_flex.scalars = nn.Parameter(torch.zeros(actual_scalars_size))
+    
     # Load weights into FlexAttention model
-    pretrained_flex.load_state_dict(state_dict, strict=False)  # strict=False to handle potential padding in scalars
+    pretrained_flex.load_state_dict(state_dict, strict=True)
     
     # Convert to batched version (this copies all weights)
     print("Converting to batched model (enables batch_size > 1)...")
@@ -132,6 +147,7 @@ def load_pretrained_model(args, model):
     
     print(f"✓ Converted FlexAttention small model to batched version")
     print(f"✓ Model: 12 layers, 6 heads, 768 dimensions")
+    print(f"✓ Vocab size: {actual_vocab_size}")
     print(f"✓ Batch size: {model.batch_size} (was 1 in FlexAttention)")
     
     # Set up scaler and optimizer
@@ -139,7 +155,7 @@ def load_pretrained_model(args, model):
     scaler = torch.amp.GradScaler(device_type, enabled=(args.dtype == 'float16'))
     optimizer = configure_optimizers(device_type, model)
 
-    return model, optimizer, scaler 
+    return model, optimizer, scaler
 
 # ===== Training Functions =====
 def get_lr(model, it):

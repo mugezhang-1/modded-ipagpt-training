@@ -764,6 +764,10 @@ t0 = time.perf_counter()
 train_steps = args.num_iterations
 train_loss_accum = 0.0
 train_loss_steps = 0
+# Track best validation loss for checkpoint saving
+best_val_loss = float('inf')
+best_checkpoint_path = None
+
 for step in range(train_steps + 1):
     last_step = (step == train_steps)
     # --------------- VALIDATION SECTION -----------------
@@ -784,6 +788,22 @@ for step in range(train_steps + 1):
         val_loss /= val_steps
         del val_loader
         dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
+        
+        # Save checkpoint if this is the best validation loss
+        if master_process and args.save_checkpoint and val_loss < best_val_loss:
+            # Delete previous best checkpoint if it exists
+            if best_checkpoint_path is not None and os.path.exists(best_checkpoint_path):
+                os.remove(best_checkpoint_path)
+                print0(f"Removed previous best checkpoint")
+            
+            # Save new best checkpoint
+            best_val_loss = val_loss
+            log = dict(step=step, code=code, model=model.state_dict(), optimizers=[opt.state_dict() for opt in optimizers], val_loss=val_loss.item())
+            os.makedirs(f"{output_dir}/{run_id_full}", exist_ok=True)
+            best_checkpoint_path = f"{output_dir}/{run_id_full}/best_state_step{step:06d}_val{val_loss:.4f}.pt"
+            torch.save(log, best_checkpoint_path)
+            print0(f"*** Saved best checkpoint at step {step} with val_loss {val_loss:.4f} ***", console=True)
+        
         # Compute average training loss
         if train_loss_steps > 0:
             avg_train_loss = train_loss_accum / train_loss_steps
@@ -799,10 +819,6 @@ for step in range(train_steps + 1):
         t0 = time.perf_counter()
 
     if last_step:
-        if master_process and args.save_checkpoint:
-            log = dict(step=step, code=code, model=model.state_dict(), optimizers=[opt.state_dict() for opt in optimizers])
-            os.makedirs(f"{output_dir}/{run_id_full}", exist_ok=True)
-            torch.save(log, f"{output_dir}/{run_id_full}/state_step{step:06d}.pt")
         # the last step only has the validation loop, so break to avoid training
         break
 
