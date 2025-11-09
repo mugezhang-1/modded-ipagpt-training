@@ -13,3 +13,6 @@ evaluation_results/
 logs/
 traces/
 evaluation_results_small/
+01ds_gen/
+02phonemization/
+03train_tokenizer/
