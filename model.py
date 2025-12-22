@@ -180,10 +180,10 @@ class GPTBatched(nn.Module):
     @staticmethod
     def from_pretrained_gpt(original_gpt):
         """Create a batched GPT from a FlexAttention GPT model
-        
+
         Args:
-            original_gpt: A GPT model trained with FlexAttention
-            
+            original_gpt: A GPT model trained with FlexAttention (from training script)
+
         Returns:
             GPTBatched model with copied weights
         """
@@ -191,35 +191,51 @@ class GPTBatched(nn.Module):
         model_dim = original_gpt.embed.embedding_dim
         vocab_size = original_gpt.embed.num_embeddings
         num_layers = len(original_gpt.blocks)
-        
+
         # Infer num_heads from attention layer
         first_attn = next(block.attn for block in original_gpt.blocks if block.attn is not None)
         num_heads = first_attn.num_heads
-        
+
         # Get max_seq_len from rotary embeddings
         max_seq_len = first_attn.rotary.cos.size(0)
-        
+
         # Create new batched model
         batched_model = GPTBatched(vocab_size, num_layers, num_heads, model_dim, max_seq_len)
-        
+
         # Copy embedding weights
         batched_model.embed.weight.data.copy_(original_gpt.embed.weight.data)
-        
+
         for i, (old_ve, new_ve) in enumerate(zip(original_gpt.value_embeds, batched_model.value_embeds)):
             new_ve.weight.data.copy_(old_ve.weight.data)
-        
-        # Copy block weights
+
+        # Copy block weights - need to convert from training script format
         for i, (old_block, new_block) in enumerate(zip(original_gpt.blocks, batched_model.blocks)):
             # Copy attention weights if exists
             if old_block.attn is not None and new_block.attn is not None:
-                new_block.attn.qkvo_w.data.copy_(old_block.attn.qkvo_w.data)
-            
-            # Copy MLP weights
-            new_block.mlp.fc_w.data.copy_(old_block.mlp.fc_w.data)
-            new_block.mlp.proj_w.data.copy_(old_block.mlp.proj_w.data)
-        
-        batched_model.scalars.data.copy_(original_gpt.scalars.data)
-        
+                # Convert qkv_w + c_proj.weight -> qkvo_w
+                # old_block.attn.qkv_w: [3, hdim, dim]
+                # old_block.attn.c_proj.weight: [dim, hdim]
+                # new_block.attn.qkvo_w: [4, hdim, dim]
+
+                qkv = old_block.attn.qkv_w.data  # [3, hdim, dim]
+                o_proj = old_block.attn.c_proj.weight.data.T  # [hdim, dim]
+
+                # Stack them together
+                new_block.attn.qkvo_w.data[0].copy_(qkv[0])  # Q
+                new_block.attn.qkvo_w.data[1].copy_(qkv[1])  # K
+                new_block.attn.qkvo_w.data[2].copy_(qkv[2])  # V
+                new_block.attn.qkvo_w.data[3].copy_(o_proj)  # O
+
+            # Copy MLP weights - convert from layers to parameters
+            # old: c_fc.weight [hdim, dim], c_proj.weight [dim, hdim]
+            # new: fc_w [hdim, dim], proj_w [dim, hdim]
+            new_block.mlp.fc_w.data.copy_(old_block.mlp.c_fc.weight.data)
+            new_block.mlp.proj_w.data.copy_(old_block.mlp.c_proj.weight.data)
+
+        # Copy scalars, handling potential size mismatch from distributed training padding
+        min_size = min(batched_model.scalars.size(0), original_gpt.scalars.size(0))
+        batched_model.scalars.data[:min_size].copy_(original_gpt.scalars.data[:min_size])
+
         return batched_model
     
     def forward_features(self, input_seq: Tensor):
@@ -591,43 +607,62 @@ class GPTClassification(nn.Module):
 
 
 # -----------------------------------------------------------------------------
-# Helper function to load original FlexAttention GPT (for weight conversion)
+# Helper classes to load training script checkpoints
+
+class CastedLinear(nn.Module):
+    """Minimal implementation of CastedLinear for loading checkpoints"""
+    def __init__(self, in_features: int, out_features: int):
+        super().__init__()
+        self.weight = nn.Parameter(torch.empty(out_features, in_features))
+
+    def forward(self, x: Tensor):
+        return F.linear(x, self.weight)
+
+class TrainingScriptAttention(nn.Module):
+    """Attention module matching the training script format"""
+    def __init__(self, dim: int, num_heads: int, max_seq_len: int):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = 128
+        hdim = num_heads * 128
+        self.qkv_w = nn.Parameter(torch.empty(3, hdim, dim))
+        self.c_proj = CastedLinear(hdim, dim)
+        self.rotary = Rotary(128, max_seq_len)
+
+class TrainingScriptMLP(nn.Module):
+    """MLP module matching the training script format"""
+    def __init__(self, dim: int):
+        super().__init__()
+        hdim = 4 * dim
+        self.c_fc = CastedLinear(dim, hdim)
+        self.c_proj = CastedLinear(hdim, dim)
+
+class TrainingScriptBlock(nn.Module):
+    """Block matching the training script format"""
+    def __init__(self, dim: int, num_heads: int, max_seq_len: int, layer_idx: int):
+        super().__init__()
+        self.attn = TrainingScriptAttention(dim, num_heads, max_seq_len) if layer_idx != 7 else None
+        self.mlp = TrainingScriptMLP(dim)
 
 class GPTFlexAttention(nn.Module):
-    """Minimal implementation to load FlexAttention checkpoints
-    
-    This is just for loading weights, not for actual use.
+    """Model structure that matches training script checkpoints
+
+    This is used to load checkpoints from train_gpt_small.py and train_gpt_medium.py
     """
     def __init__(self, vocab_size: int, num_layers: int, num_heads: int, model_dim: int, max_seq_len: int):
         super().__init__()
-        from torch.nn.attention.flex_attention import BlockMask, flex_attention
-        
+
         self.embed = nn.Embedding(vocab_size, model_dim)
         self.value_embeds = nn.ModuleList([nn.Embedding(vocab_size, model_dim) for _ in range(3)])
-        
-        # Use a simple placeholder for blocks
-        self.blocks = nn.ModuleList([self._create_flex_block(model_dim, num_heads, max_seq_len, i) for i in range(num_layers)])
-        
-        self.lm_head_w = nn.Parameter(torch.zeros(((vocab_size // 128) + 1) * 128, model_dim))
+        self.blocks = nn.ModuleList([
+            TrainingScriptBlock(model_dim, num_heads, max_seq_len, i)
+            for i in range(num_layers)
+        ])
+
+        # The training script pads vocab_size to next multiple of 128
+        padded_vocab_size = ((vocab_size // 128) + 1) * 128
+        self.lm_head = CastedLinear(model_dim, padded_vocab_size)
+
+        # Scalars may have padding for distributed training
+        # We'll handle variable sizes when loading
         self.scalars = nn.Parameter(torch.zeros(5 * num_layers))
-    
-    def _create_flex_block(self, dim, num_heads, max_seq_len, layer_idx):
-        """Create a minimal block structure for loading weights"""
-        block = nn.Module()
-        if layer_idx != 7:
-            # Create attention module
-            attn = nn.Module()
-            hdim = num_heads * 128
-            attn.qkvo_w = nn.Parameter(torch.empty(4, hdim, dim).bfloat16())
-            attn.rotary = Rotary(128, max_seq_len)
-            attn.num_heads = num_heads
-            attn.head_dim = 128
-            block.attn = attn
-        else:
-            block.attn = None
-        
-        # Create MLP
-        mlp = MLP(dim)
-        block.mlp = mlp
-        
-        return block
