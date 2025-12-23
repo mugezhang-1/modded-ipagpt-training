@@ -659,9 +659,9 @@ class GPTFlexAttention(nn.Module):
             for i in range(num_layers)
         ])
 
-        # The training script pads vocab_size to next multiple of 128
-        padded_vocab_size = ((vocab_size // 128) + 1) * 128
-        self.lm_head = CastedLinear(model_dim, padded_vocab_size)
+        # vocab_size is already padded when detected from checkpoint
+        # Don't pad it again!
+        self.lm_head = CastedLinear(model_dim, vocab_size)
 
         # Scalars may have padding for distributed training
         # We'll handle variable sizes when loading

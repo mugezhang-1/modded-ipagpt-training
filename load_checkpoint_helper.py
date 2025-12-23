@@ -142,8 +142,35 @@ def load_pretrained_checkpoint(checkpoint_path, device='cuda'):
             max_seq_len=info['max_seq_len']
         )
 
-        # Load weights (strict=False to handle scalars size mismatch)
-        pretrained_flex.load_state_dict(state_dict, strict=False)
+        # Handle scalars size mismatch manually
+        if 'scalars' in state_dict:
+            checkpoint_scalars = state_dict.pop('scalars')
+            model_scalars_size = pretrained_flex.scalars.size(0)
+            checkpoint_scalars_size = checkpoint_scalars.size(0)
+
+            if checkpoint_scalars_size != model_scalars_size:
+                print(f"  Note: Scalars size mismatch (checkpoint: {checkpoint_scalars_size}, model: {model_scalars_size})")
+                print(f"        Copying first {min(checkpoint_scalars_size, model_scalars_size)} values")
+                min_size = min(checkpoint_scalars_size, model_scalars_size)
+                pretrained_flex.scalars.data[:min_size].copy_(checkpoint_scalars[:min_size])
+            else:
+                pretrained_flex.scalars.data.copy_(checkpoint_scalars)
+
+        # Load remaining weights
+        missing_keys, unexpected_keys = pretrained_flex.load_state_dict(state_dict, strict=False)
+
+        # Filter out expected missing/unexpected keys
+        expected_missing = {'scalars'}  # We handled this manually
+        expected_unexpected = set()
+
+        unexpected_missing = [k for k in missing_keys if k not in expected_missing]
+        unexpected_unexpected = [k for k in unexpected_keys if k not in expected_unexpected]
+
+        if unexpected_missing:
+            print(f"  Warning: Missing keys: {unexpected_missing}")
+        if unexpected_unexpected:
+            print(f"  Warning: Unexpected keys: {unexpected_unexpected}")
+
         print("✓ Loaded checkpoint weights successfully")
 
         # Convert to batched model
@@ -161,8 +188,35 @@ def load_pretrained_checkpoint(checkpoint_path, device='cuda'):
             max_seq_len=info['max_seq_len']
         )
 
-        # Load weights (strict=False to handle scalars size mismatch)
-        batched_model.load_state_dict(state_dict, strict=False)
+        # Handle scalars size mismatch manually
+        if 'scalars' in state_dict:
+            checkpoint_scalars = state_dict.pop('scalars')
+            model_scalars_size = batched_model.scalars.size(0)
+            checkpoint_scalars_size = checkpoint_scalars.size(0)
+
+            if checkpoint_scalars_size != model_scalars_size:
+                print(f"  Note: Scalars size mismatch (checkpoint: {checkpoint_scalars_size}, model: {model_scalars_size})")
+                print(f"        Copying first {min(checkpoint_scalars_size, model_scalars_size)} values")
+                min_size = min(checkpoint_scalars_size, model_scalars_size)
+                batched_model.scalars.data[:min_size].copy_(checkpoint_scalars[:min_size])
+            else:
+                batched_model.scalars.data.copy_(checkpoint_scalars)
+
+        # Load remaining weights
+        missing_keys, unexpected_keys = batched_model.load_state_dict(state_dict, strict=False)
+
+        # Filter out expected missing/unexpected keys
+        expected_missing = {'scalars'}  # We handled this manually
+        expected_unexpected = set()
+
+        unexpected_missing = [k for k in missing_keys if k not in expected_missing]
+        unexpected_unexpected = [k for k in unexpected_keys if k not in expected_unexpected]
+
+        if unexpected_missing:
+            print(f"  Warning: Missing keys: {unexpected_missing}")
+        if unexpected_unexpected:
+            print(f"  Warning: Unexpected keys: {unexpected_unexpected}")
+
         print("✓ Loaded checkpoint weights directly (already in batched format)")
 
     else:
