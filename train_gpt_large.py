@@ -505,7 +505,7 @@ print0("="*100)
 #    Construct model and optimizer     #
 ########################################
 
-model: nn.Module = GPT(vocab_size=args.vocab_size, num_layers=36, num_heads=20, model_dim=1280,
+model: nn.Module = GPT(vocab_size=args.vocab_size, num_layers=24, num_heads=18, model_dim=1152,
                        max_seq_len=max(args.train_seq_len, args.val_seq_len)).cuda()
 for m in model.modules():
     if isinstance(m, nn.Embedding):
